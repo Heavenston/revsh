@@ -49,18 +49,21 @@ async fn main() -> anyhow::Result<()> {
             let max_id = users.iter().map(|a| a.uid).max().unwrap_or(0);
             let longest_addr = users.iter()
                 .map(|a| format!("{:?}", a.addr).len()).max().unwrap_or(0);
+            let age_length = users.iter()
+                .map(|a| format!("{}", (chrono::Utc::now() - a.connected_at).num_seconds()).len()).max().unwrap_or(0);
             let id_length = format!("{max_id}").len();
-            println!("--{}---{}-------", "-".repeat(id_length), "-".repeat(longest_addr));
+            println!("--{}---{}---{}---", "-".repeat(id_length), "-".repeat(longest_addr), "-".repeat(age_length));
             for user in users {
                 println!(
-                    "| {id:0id_length$} | {addr:?} | {age:3^} |",
+                    "| {id:0id_length$} | {addr:?} | {age:0age_length$}s |",
                     id = user.uid,
                     id_length = id_length,
                     addr = user.addr,
-                    age = "5s",
+                    age = (chrono::Utc::now() - user.connected_at).num_seconds(),
+                    age_length = age_length
                 );
             }
-            println!("--{}---{}-------", "-".repeat(id_length), "-".repeat(longest_addr));
+            println!("--{}---{}---{}---", "-".repeat(id_length), "-".repeat(longest_addr), "-".repeat(age_length));
         }
     }
   
