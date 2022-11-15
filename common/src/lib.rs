@@ -25,7 +25,7 @@ pub enum S2CMessage {
     },
     Input {
         target_pid: UID,
-        text: String,
+        data: Box<[u8]>,
     },
 }
 
@@ -33,11 +33,11 @@ pub enum S2CMessage {
 pub enum C2SMessage {
     ProcessOutput {
         pid: UID,
-        text: String,
+        data: Box<[u8]>,
     },
     ProcessStopped {
         pid: UID,
-        exit_code: u8,
+        exit_code: i32,
     },
 }
 
