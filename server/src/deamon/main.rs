@@ -171,8 +171,14 @@ async fn handle_cli_client(
                 },
             },
             
-            msg = recv_message_from::<InCliMessage, _>(&mut reader) => {
-                match msg.unwrap() {
+            message = recv_message_from::<InCliMessage, _>(&mut reader) => {
+                let msg = match message {
+                    Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                        break Ok(());
+                    },
+                    a => a.unwrap(),
+                };
+                match msg {
                     InCliMessage::ListClients {
                         page_size: _,
                         page_index: _,
