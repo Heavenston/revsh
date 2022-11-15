@@ -57,10 +57,10 @@ pub async fn recv_message_from<T: for<'a> Deserialize<'a>, R: AsyncRead + Unpin>
     mut reader: R
 ) -> Result<T, IoError> {
     let mut len_buf = [0u8; size_of::<usize>()];
-    reader.read_exact(&mut len_buf).await.unwrap();
+    reader.read_exact(&mut len_buf).await?;
     let len = usize::from_ne_bytes(len_buf);
     let mut buffer = vec![0u8; len];
-    reader.read_exact(&mut buffer).await.unwrap();
+    reader.read_exact(&mut buffer).await?;
 
     Ok(bincode::deserialize(&buffer).unwrap())
 }

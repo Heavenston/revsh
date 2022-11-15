@@ -41,7 +41,6 @@ struct GlobalEvent {
 struct RunningProcess {
     pid: UID,
     event_sender: mpsc::Sender<OutProcessEvent>,
-    event_receiver: mpsc::Receiver<InProcessEvent>,
 }
 
 #[tokio::main]
@@ -49,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
     let bjr = std::env::args().nth(1).expect("Missing argument");
     println!("Connecting to {bjr:?}...");
 
-    let socket = TcpSocket::new_v4().unwrap();
+    let mut socket = TcpSocket::new_v4().unwrap();
     let address: SocketAddr = bjr.parse().unwrap();
     let stream = socket.connect(address.clone()).await?;
     println!("Successfully connected to {:?}!", address);
@@ -62,24 +61,46 @@ async fn main() -> anyhow::Result<()> {
     loop {
         tokio::select! {
             message = recv_message_from(&mut reader) => {
-                let mess = message.unwrap();
+                let mess = match message {
+                    Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                        println!("Disonnected from server");
+                        
+                        loop {
+                            println!("Trying to reconnect...");
+                            socket = TcpSocket::new_v4().unwrap();
+                            let stream = match socket.connect(address.clone()).await {
+                                Ok(s) => s,
+                                Err(..) => {
+                                    println!("Failed (wait 2s)");
+                                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                                    continue
+                                },
+                            };
+                            println!("Successfully reconnected to {:?}!", address);
+    
+                            (reader, writer) = stream.into_split();
+                            break;
+                        }
+                        
+                        continue;
+                    },
+                    a => a.unwrap(),
+                };
                 match mess {
                     S2CMessage::Execute {
                         pid, exe, args, print_output
                     } => {
-                        let (in_send, in_recv) = mpsc::channel(100);
                         let (out_send, out_recv) = mpsc::channel(100);
                         processes.write().unwrap().insert(pid, RunningProcess {
                             pid,
                             event_sender: out_send,
-                            event_receiver: in_recv,
                         });
 
                         tokio::spawn(
                             handle_process(
                                 pid, exe, args, print_output,
                                 Arc::clone(&processes), global_sender.clone(),
-                                in_send, out_recv,
+                                out_recv,
                             )
                         );
                     }
@@ -131,7 +152,7 @@ async fn handle_process(
     pid: UID, exe: String, args: Vec<String>, print_output: bool,
     processes: Arc<RwLock<HashMap<UID, RunningProcess>>>,
     global_sender: broadcast::Sender<GlobalEvent>,
-    mut in_send: mpsc::Sender<InProcessEvent>, mut out_recv: mpsc::Receiver<OutProcessEvent>,
+    mut out_recv: mpsc::Receiver<OutProcessEvent>,
 ) -> anyhow::Result<()> {
     let mut child = process::Command::new(exe)
         .args(args)
@@ -150,9 +171,12 @@ async fn handle_process(
         tokio::select! {
             exit_code = child.wait() => {
                 processes.write().unwrap().remove(&pid);
-                in_send.send(InProcessEvent::Exited {
-                    status_code: exit_code.unwrap(),
-                }).await.unwrap();
+                global_sender.send(GlobalEvent {
+                    sender: pid,
+                    event: InProcessEvent::Exited {
+                        status_code: exit_code.unwrap(),
+                    },
+                }).unwrap();
                 break Ok(());
             },
             Some(out) = out_recv.recv() => {
@@ -160,9 +184,12 @@ async fn handle_process(
                     OutProcessEvent::Kill => {
                         child.kill().await.expect("No kill");
                         processes.write().unwrap().remove(&pid);
-                        in_send.send(InProcessEvent::Exited {
-                            status_code: ExitStatus::from_raw(0),
-                        }).await.unwrap();
+                        global_sender.send(GlobalEvent {
+                            sender: pid,
+                            event: InProcessEvent::Exited {
+                                status_code: ExitStatus::from_raw(0),
+                            }
+                        }).unwrap();
                     }
                     OutProcessEvent::SendInput { data } => {
                         stdin.write_all(&data).await.unwrap();
@@ -175,9 +202,12 @@ async fn handle_process(
                     continue;
                 }
                 
-                in_send.send(InProcessEvent::Printed {
-                    data: read_buf[0..length].into(),
-                }).await.unwrap();
+                global_sender.send(GlobalEvent {
+                    sender: pid,
+                    event: InProcessEvent::Printed {
+                        data: read_buf[0..length].into(),
+                    },
+                }).unwrap();
             }
             e = stderr.read(&mut err_buf) => {
                 let length = e.unwrap();
@@ -185,9 +215,12 @@ async fn handle_process(
                     continue;
                 }
                 
-                in_send.send(InProcessEvent::Printed {
-                    data: read_buf[0..length].into(),
-                }).await.unwrap();
+                global_sender.send(GlobalEvent {
+                    sender: pid,
+                    event: InProcessEvent::Printed {
+                        data: read_buf[0..length].into(),
+                    },
+                }).unwrap();
             }
         }
     }

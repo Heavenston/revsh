@@ -46,6 +46,7 @@ async fn main() -> anyhow::Result<()> {
         HashMap::<UID, Client>::new()
     ));
     afs::create_dir_all("/tmp/revsh").await.expect("Could not create temp directory");
+    afs::remove_file("/tmp/revsh/ipc").await.unwrap();
     
     let ipc_listener = UnixListener::bind("/tmp/revsh/ipc").expect("Could not create the ipc socket");
     
@@ -86,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
                                 match send_message_into(&mess, &mut writer)
                                     .await {
                                     Err(e) if 
-                                        e.kind() == ErrorKind::ConnectionReset
+                                        e.kind() == ErrorKind::UnexpectedEof
                                     => {
                                         break;
                                     },
@@ -103,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
                     loop {
                         let mess = match recv_message_from(&mut reader).await {
                             Err(e) if 
-                                e.kind() == ErrorKind::ConnectionReset
+                                e.kind() == ErrorKind::UnexpectedEof
                             => {
                                 gs.send(GlobalEvent::ClientDisconnect {
                                     uid
