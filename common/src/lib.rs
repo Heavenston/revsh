@@ -3,13 +3,14 @@ use std::sync::atomic;
 use std::marker::Unpin;
 use std::io::Error as IoError;
 use std::mem::size_of;
+use nanorand::Rng;
 use tokio::io::{ AsyncWrite, AsyncRead, AsyncWriteExt, AsyncReadExt };
 
 pub static UID_COUNTER: atomic::AtomicU32 = atomic::AtomicU32::new(0);
 
 pub type UID = u32;
 pub fn new_uid() -> UID {
-    UID_COUNTER.fetch_add(1, atomic::Ordering::Relaxed)
+    nanorand::tls_rng().generate()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
