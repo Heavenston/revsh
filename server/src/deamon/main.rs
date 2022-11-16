@@ -20,7 +20,6 @@ struct Client {
     pub addr: SocketAddr,
 
     pub out_events: mpsc::Sender<OutClientEvent>,
-    pub in_events: mpsc::Receiver<InClientEvent>,
 }
 
 #[derive(Debug, Clone)]
@@ -56,16 +55,10 @@ async fn main() -> anyhow::Result<()> {
         tokio::select! {
             a = listener.accept() => {
                 let (socket, addr) = a.unwrap();
-                println!(
-                    "New client connected from {:?}:{:?}",
-                    addr.ip(),
-                    addr.port()
-                );
                 
                 let (mut reader, mut writer) = socket.into_split();
 
                 let (out_sender, mut out_receiver) = mpsc::channel(100);
-                let (in_sender, in_receiver) = mpsc::channel(100);
                 
                 let uid = new_uid();
                 clients.write().unwrap().insert(uid, Client {
@@ -73,14 +66,20 @@ async fn main() -> anyhow::Result<()> {
                     addr,
                     connected_since: Utc::now(),
                     out_events: out_sender,
-                    in_events: in_receiver,
                 });
                 global_sender.send(GlobalEvent::NewClient { uid }).unwrap();
+
+                println!(
+                    "New client #{uid} connected from {:?}:{:?}",
+                    addr.ip(),
+                    addr.port()
+                );
 
                 let gs = global_sender.clone();
                 tokio::spawn(async move {
                     loop {
-                        let out_event = out_receiver.recv().await.unwrap();
+                        let Some(out_event) = out_receiver.recv().await
+                            else { continue };
                         
                         match out_event {
                             OutClientEvent::SendMessage(mess) => {
@@ -111,13 +110,12 @@ async fn main() -> anyhow::Result<()> {
                                     uid
                                 }).unwrap();
                                 clis.write().unwrap().remove(&uid);
+                                println!("Client {uid}({addr:?}) disconnected");
                                 break;
                             },
                             a => a.unwrap(),
                         };
 
-                        in_sender.send(InClientEvent::Message(mess.clone()))
-                            .await.unwrap();
                         global_sender.send(GlobalEvent::ClientMessage {
                             sender: uid,
                             message: mess
@@ -140,9 +138,8 @@ async fn main() -> anyhow::Result<()> {
 async fn handle_cli_client(
     clients: Arc<RwLock<HashMap<UID, Client>>>,
     mut global_receiver: broadcast::Receiver<GlobalEvent>,
-    mut stream: UnixStream,
+    stream: UnixStream,
 ) -> anyhow::Result<()> {
-    
     let (mut reader, mut writer) = stream.into_split();
 
     loop {
