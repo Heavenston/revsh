@@ -204,6 +204,7 @@ async fn main() -> anyhow::Result<()> {
                     } if pid == created_id => {
                         let mut a = std::io::stdout().lock();
                         a.write_all(&data).unwrap();
+                        a.flush().unwrap();
                     },
                     _ => (),
                 }
