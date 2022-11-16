@@ -1,5 +1,5 @@
 use tokio::net::UnixStream;
-use std::io::Write;
+use std::io::{ Write, BufRead };
 use clap::Parser;
 
 use revsh_common::*;
@@ -84,14 +84,34 @@ async fn main() -> anyhow::Result<()> {
                         pid: created_id,
                         exe: "sh".into(),
                         args: vec!["-c".into(), command],
-                        print_output: false
+                        print_output: true
                     },
                 },
                 &mut stream,
             ).await.unwrap();
+            
+            let (mut reader, mut writer) = stream.into_split();
+            
+            tokio::spawn(async move {
+                loop {
+                    let line = tokio::task::block_in_place(|| {
+                        let mut stdin = std::io::stdin().lock();
+                        let mut str = String::new();
+                        stdin.read_line(&mut str).unwrap();
+                        str
+                    });
+                    send_message_into(&InCliMessage::SendMessageTo {
+                        target,
+                        message: S2CMessage::Input {
+                            target_pid: created_id,
+                            data: line.into_bytes().into_boxed_slice(),
+                        },
+                    }, &mut writer).await.unwrap();
+                }
+            });
 
             loop {
-                let e: OutCliMessage = recv_message_from(&mut stream).await.unwrap();
+                let e: OutCliMessage = recv_message_from(&mut reader).await.unwrap();
                 match e {
                     OutCliMessage::ClientMessage {
                         sender,
@@ -99,6 +119,7 @@ async fn main() -> anyhow::Result<()> {
                     } if sender == target && pid == created_id => {
                         let mut a = std::io::stdout().lock();
                         a.write_all(&data).unwrap();
+                        a.flush().unwrap();
                     },
                     OutCliMessage::ClientMessage {
                         sender,

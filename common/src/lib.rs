@@ -10,7 +10,7 @@ pub static UID_COUNTER: atomic::AtomicU32 = atomic::AtomicU32::new(0);
 
 pub type UID = u32;
 pub fn new_uid() -> UID {
-    nanorand::tls_rng().generate()
+    nanorand::tls_rng().generate::<UID>() % 0xFFFF
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

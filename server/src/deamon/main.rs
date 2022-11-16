@@ -212,11 +212,13 @@ async fn handle_cli_client(
                         target,
                         message,
                     } => {
-                        let sender = clients.read().unwrap()[&target]
-                            .out_events.clone();
-                        sender
-                            .send(OutClientEvent::SendMessage(message)).await
-                            .unwrap();
+                        let sender = clients.read().unwrap().get(&target)
+                            .map(|a| a.out_events.clone());
+                        if let Some(sender) = sender {
+                            sender
+                                .send(OutClientEvent::SendMessage(message)).await
+                                .unwrap();
+                        }
                     },
                     InCliMessage::BroadcastMessage {
                         message,

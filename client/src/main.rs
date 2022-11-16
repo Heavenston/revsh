@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::mem::size_of;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, RwLock};
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Write, Read};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpSocket};
 use std::collections::HashMap;
@@ -203,7 +203,9 @@ async fn handle_process(
                 }
                 
                 if print_output {
-                    std::io::stdout().lock().write_all(&read_buf[..length]).unwrap();
+                    let mut out = std::io::stdout().lock();
+                    out.write_all(&read_buf[..length]).unwrap();
+                    out.flush().unwrap();
                 }
                 
                 global_sender.send(GlobalEvent {
@@ -220,7 +222,9 @@ async fn handle_process(
                 }
 
                 if print_output {
-                    std::io::stderr().lock().write_all(&read_buf[..length]).unwrap();
+                    let mut out = std::io::stderr().lock();
+                    out.write_all(&err_buf[..length]).unwrap();
+                    out.flush().unwrap();
                 }
                 
                 global_sender.send(GlobalEvent {
