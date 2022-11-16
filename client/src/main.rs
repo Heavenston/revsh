@@ -230,7 +230,7 @@ async fn handle_process(
                 global_sender.send(GlobalEvent {
                     sender: pid,
                     event: InProcessEvent::Printed {
-                        data: read_buf[0..length].into(),
+                        data: err_buf[0..length].into(),
                     },
                 }).unwrap();
             }

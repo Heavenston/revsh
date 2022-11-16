@@ -87,6 +87,7 @@ async fn main() -> anyhow::Result<()> {
                                     .await {
                                     Err(e) if 
                                         e.kind() == ErrorKind::UnexpectedEof ||
+                                        e.kind() == io::ErrorKind::BrokenPipe ||
                                         e.kind() == ErrorKind::ConnectionReset
                                     => {
                                         break;
@@ -106,6 +107,7 @@ async fn main() -> anyhow::Result<()> {
                         let mess: C2SMessage = match recv_message_from(&mut reader).await {
                             Err(e) if 
                                 e.kind() == ErrorKind::UnexpectedEof ||
+                                e.kind() == io::ErrorKind::BrokenPipe ||
                                 e.kind() == ErrorKind::ConnectionReset
                             => {
                                 gs.send(GlobalEvent::ClientDisconnect {
@@ -179,6 +181,7 @@ async fn handle_cli_client(
                 let msg = match message {
                     Err(e) if
                         e.kind() == io::ErrorKind::UnexpectedEof ||
+                        e.kind() == io::ErrorKind::BrokenPipe ||
                         e.kind() == io::ErrorKind::ConnectionReset
                     => {
                         break Ok(());
