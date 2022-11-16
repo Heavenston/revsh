@@ -19,11 +19,15 @@ enum Action {
     },
     #[command(name = "run")]
     RunCommand {
+        #[arg(short, long)]
+        detach: bool,
         target: UID,
         command: String,
     },
     #[command(name = "broadcast")]
     RunBroadcast {
+        #[arg(short, long)]
+        detach: bool,
         command: String,
     },
 }
@@ -75,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
             }
             println!("--{}---{}---{}---", "-".repeat(id_length), "-".repeat(longest_addr), "-".repeat(age_length));
         },
-        Action::RunCommand { target, command } => {
+        Action::RunCommand { target, command, detach } => {
             let created_id = new_uid();
             send_message_into(
                 &InCliMessage::SendMessageTo {
@@ -89,6 +93,8 @@ async fn main() -> anyhow::Result<()> {
                 },
                 &mut stream,
             ).await.unwrap();
+            
+            if detach { return Ok(()) };
             
             let (mut reader, mut writer) = stream.into_split();
             
@@ -131,7 +137,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             };
         },
-        Action::RunBroadcast { command } => {
+        Action::RunBroadcast { command, detach } => {
             let created_id = new_uid();
             send_message_into(
                 &InCliMessage::BroadcastMessage {
@@ -144,6 +150,8 @@ async fn main() -> anyhow::Result<()> {
                 },
                 &mut stream,
             ).await.unwrap();
+
+            if detach { return Ok(()) };
 
             loop {
                 let e: OutCliMessage = recv_message_from(&mut stream).await.unwrap();
