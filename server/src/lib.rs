@@ -64,6 +64,8 @@ pub enum OutCliMessage {
     ClientList {
         users: Vec<OutCliUserInfo>,
     },
+    SendToFeeback(Result<(), String>),
+
     ClientConnected {
         info: OutCliUserInfo,
     },

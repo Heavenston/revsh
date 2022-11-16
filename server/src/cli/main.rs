@@ -1,6 +1,8 @@
 use tokio::net::UnixStream;
 use std::io::{ Write, BufRead };
 use clap::Parser;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use revsh_common::*;
 use revsh_server::*;
@@ -93,11 +95,27 @@ async fn main() -> anyhow::Result<()> {
                 },
                 &mut stream,
             ).await.unwrap();
+
+            // Waiting for server's feedback
+            loop {
+                let e: OutCliMessage = recv_message_from(&mut stream).await.unwrap();
+                match e {
+                    OutCliMessage::SendToFeeback(Ok(())) => {
+                        break;
+                    },
+                    OutCliMessage::SendToFeeback(Err(e)) => {
+                        println!("Execution failed: {e}");
+                        return Ok(());
+                    },
+                    _ => (),
+                }
+            }
             
             if detach { return Ok(()) };
             
-            let (mut reader, mut writer) = stream.into_split();
-            
+            let (mut reader, writer) = stream.into_split();
+            let writer_1 = Arc::new(Mutex::new(writer));
+            let writer_2 = writer_1.clone();
             tokio::spawn(async move {
                 loop {
                     let line = tokio::task::block_in_place(|| {
@@ -106,18 +124,31 @@ async fn main() -> anyhow::Result<()> {
                         stdin.read_line(&mut str).unwrap();
                         str
                     });
+                    let mut writer = writer_2.lock().await;
                     send_message_into(&InCliMessage::SendMessageTo {
                         target,
                         message: S2CMessage::Input {
                             target_pid: created_id,
                             data: line.into_bytes().into_boxed_slice(),
                         },
-                    }, &mut writer).await.unwrap();
+                    }, &mut *writer).await.unwrap();
                 }
             });
+            
+            let (exit_now_send, mut exit_now_recv) = 
+                tokio::sync::mpsc::channel::<()>(1);
 
-            loop {
-                let e: OutCliMessage = recv_message_from(&mut reader).await.unwrap();
+            ctrlc::set_handler(move || {
+                exit_now_send.try_send(()).unwrap();
+            }).expect("Error setting Ctrl-C handler");            
+
+            let a = loop {
+                let e: OutCliMessage = tokio::select! {
+                    a = recv_message_from(&mut reader) => a.unwrap(),
+                    _ = exit_now_recv.recv() => {
+                        break 1;
+                    }
+                };
                 match e {
                     OutCliMessage::ClientMessage {
                         sender,
@@ -131,11 +162,22 @@ async fn main() -> anyhow::Result<()> {
                         sender,
                         message: C2SMessage::ProcessStopped { pid, exit_code }
                     } if sender == target && pid == created_id => {
-                        std::process::exit(exit_code);
+                        break exit_code;
                     },
+                    OutCliMessage::ClientDisonnected { uid } if uid == target => {
+                        println!("Target client disconnected");
+                        break 1;
+                    }
                     _ => (),
                 }
             };
+            let mut writer = writer_1.lock().await;
+            send_message_into(&InCliMessage::SendMessageTo {
+                target,
+                message: S2CMessage::KillProcess { pid: created_id },
+            }, &mut *writer).await.unwrap();
+            
+            std::process::exit(a);
         },
         Action::RunBroadcast { command, detach } => {
             let created_id = new_uid();

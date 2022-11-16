@@ -86,7 +86,8 @@ async fn main() -> anyhow::Result<()> {
                                 match send_message_into(&mess, &mut writer)
                                     .await {
                                     Err(e) if 
-                                        e.kind() == ErrorKind::UnexpectedEof
+                                        e.kind() == ErrorKind::UnexpectedEof ||
+                                        e.kind() == ErrorKind::ConnectionReset
                                     => {
                                         break;
                                     },
@@ -104,7 +105,8 @@ async fn main() -> anyhow::Result<()> {
                     loop {
                         let mess: C2SMessage = match recv_message_from(&mut reader).await {
                             Err(e) if 
-                                e.kind() == ErrorKind::UnexpectedEof
+                                e.kind() == ErrorKind::UnexpectedEof ||
+                                e.kind() == ErrorKind::ConnectionReset
                             => {
                                 gs.send(GlobalEvent::ClientDisconnect {
                                     uid
@@ -175,7 +177,10 @@ async fn handle_cli_client(
             
             message = recv_message_from::<InCliMessage, _>(&mut reader) => {
                 let msg = match message {
-                    Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                    Err(e) if
+                        e.kind() == io::ErrorKind::UnexpectedEof ||
+                        e.kind() == io::ErrorKind::ConnectionReset
+                    => {
                         break Ok(());
                     },
                     a => a.unwrap(),
@@ -212,9 +217,21 @@ async fn handle_cli_client(
                         let sender = clients.read().unwrap().get(&target)
                             .map(|a| a.out_events.clone());
                         if let Some(sender) = sender {
+                            send_message_into(
+                                &OutCliMessage::SendToFeeback(Ok(())),
+                                &mut writer,
+                            ).await.unwrap();
                             sender
                                 .send(OutClientEvent::SendMessage(message)).await
                                 .unwrap();
+                        }
+                        else {
+                            send_message_into(
+                                &OutCliMessage::SendToFeeback(Err(
+                                    "Uknown client id".into()
+                                )),
+                                &mut writer,
+                            ).await.unwrap();
                         }
                     },
                     InCliMessage::BroadcastMessage {
