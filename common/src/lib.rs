@@ -20,6 +20,7 @@ pub enum S2CMessage {
         exe: String,
         args: Vec<String>,
         print_output: bool,
+        client_only: bool,
     },
     KillProcess {
         pid: UID,

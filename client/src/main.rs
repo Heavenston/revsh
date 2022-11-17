@@ -1,6 +1,7 @@
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use std::mem::size_of;
+use futures::future::OptionFuture;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, RwLock};
 use std::io::{self, BufRead, Write, Read};
@@ -48,12 +49,28 @@ async fn main() -> anyhow::Result<()> {
     let bjr = std::env::args().nth(1).expect("Missing argument");
     println!("Connecting to {bjr:?}...");
 
-    let mut socket = TcpSocket::new_v4().unwrap();
     let address: SocketAddr = bjr.parse().unwrap();
-    let stream = socket.connect(address.clone()).await?;
-    println!("Successfully connected to {:?}!", address);
-    
-    let (mut reader, mut writer) = stream.into_split();
+
+    let mut socket;
+    let mut reader;
+    let mut writer;
+
+    loop {
+        socket = TcpSocket::new_v4().unwrap();
+        let stream = match socket.connect(address.clone()).await {
+            Ok(s) => s,
+            Err(..) => {
+                println!("Failed (wait 5s)");
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                println!("Retrying to connect...");
+                continue
+            },
+        };
+        println!("Successfully reconnected to {:?}!", address);
+
+        (reader, writer) = stream.into_split();
+        break;
+    }
 
     let processes = Arc::new(RwLock::new(HashMap::<UID, RunningProcess>::new()));
     let (global_sender, mut global_receiver) = broadcast::channel::<GlobalEvent>(100);
@@ -88,7 +105,7 @@ async fn main() -> anyhow::Result<()> {
                 };
                 match mess {
                     S2CMessage::Execute {
-                        pid, exe, args, print_output
+                        pid, exe, args, print_output, client_only
                     } => {
                         let (out_send, out_recv) = mpsc::channel(100);
                         processes.write().unwrap().insert(pid, RunningProcess {
@@ -98,7 +115,7 @@ async fn main() -> anyhow::Result<()> {
 
                         tokio::spawn(
                             handle_process(
-                                pid, exe, args, print_output,
+                                pid, exe, args, print_output, client_only,
                                 Arc::clone(&processes), global_sender.clone(),
                                 out_recv,
                             )
@@ -149,20 +166,27 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn handle_process(
-    pid: UID, exe: String, args: Vec<String>, print_output: bool,
+    pid: UID, exe: String, args: Vec<String>,
+    print_output: bool, client_only: bool,
     processes: Arc<RwLock<HashMap<UID, RunningProcess>>>,
     global_sender: broadcast::Sender<GlobalEvent>,
     mut out_recv: mpsc::Receiver<OutProcessEvent>,
 ) -> anyhow::Result<()> {
-    let mut child = process::Command::new(exe)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    let mut stdout = child.stdout.take().unwrap();
-    let mut stderr = child.stderr.take().unwrap();
-    let mut stdin  = child.stdin.take().unwrap();
+    let mut child = if client_only {
+        process::Command::new(exe)
+            .args(args)
+            .spawn()?
+    } else {
+        process::Command::new(exe)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?
+    };
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+    let mut stdin  = child.stdin.take();
     
     let mut read_buf = [0u8; 2048];
     let mut err_buf = [0u8; 2048];
@@ -192,12 +216,14 @@ async fn handle_process(
                         }).unwrap();
                     }
                     OutProcessEvent::SendInput { data } => {
-                        stdin.write_all(&data).await.unwrap();
+                        if let Some(stdin) = &mut stdin {
+                            stdin.write_all(&data).await.unwrap();
+                        }
                     }
                 }
             },
-            e = stdout.read(&mut read_buf) => {
-                let length = e.unwrap();
+            e = OptionFuture::from(stdout.as_mut().map(|a| a.read(&mut read_buf))), if stdout.is_some() => {
+                let length = e.unwrap().unwrap();
                 if length == 0 {
                     continue;
                 }
@@ -215,8 +241,8 @@ async fn handle_process(
                     },
                 }).unwrap();
             }
-            e = stderr.read(&mut err_buf) => {
-                let length = e.unwrap();
+            e = OptionFuture::from(stderr.as_mut().map(|a| a.read(&mut err_buf))), if stderr.is_some() => {
+                let length = e.unwrap().unwrap();
                 if length == 0 {
                     continue;
                 }

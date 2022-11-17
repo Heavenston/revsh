@@ -25,6 +25,8 @@ enum Action {
     RunCommand {
         #[arg(short, long)]
         detach: bool,
+        #[arg(short, long)]
+        client_only: bool,
         target: UID,
         command: String,
     },
@@ -32,6 +34,8 @@ enum Action {
     RunBroadcast {
         #[arg(short, long)]
         detach: bool,
+        #[arg(short, long)]
+        client_only: bool,
         command: String,
     },
 }
@@ -70,21 +74,25 @@ async fn main() -> anyhow::Result<()> {
             }
             println!("--{}---{}---{}---", "-".repeat(id_length), "-".repeat(longest_addr), "-".repeat(age_length));
         },
-        Action::RunCommand { target, command, detach } => {
+        Action::RunCommand { target, command, detach, client_only } => {
             let (reader, writer) = stream.into_split();
             pass_command_to(
                 reader, writer,
-                detach, vec![target], "sh".into(), vec!["-c".into(), command]
+                detach, client_only,
+                vec![target], "sh".into(), vec!["-c".into(), command]
             ).await.unwrap();
+            std::process::exit(0);
         },
-        Action::RunBroadcast { command, detach } => {
+        Action::RunBroadcast { command, detach, client_only } => {
             let (mut reader, mut writer) = stream.into_split();
             let users = list_users(&mut reader, &mut writer).await.unwrap();
             let ids = users.into_iter().map(|i| i.uid).collect::<Vec<_>>();
             pass_command_to(
                 reader, writer,
-                detach, ids, "sh".into(), vec!["-c".into(), command]
+                detach, client_only,
+                ids, "sh".into(), vec!["-c".into(), command]
             ).await.unwrap();
+            std::process::exit(0);
         }
     }
   
@@ -117,7 +125,7 @@ async fn list_users(
 async fn pass_command_to(
     mut reader: impl AsyncRead + Unpin + Send + 'static,
     mut writer: impl AsyncWrite + Unpin + Send + 'static,
-    detach: bool,
+    detach: bool, client_only: bool,
     targets: Vec<UID>, exe: String, args: Vec<String>
 ) -> std::io::Result<()> {
     let created_id = new_uid();
@@ -128,7 +136,8 @@ async fn pass_command_to(
                 message: S2CMessage::Execute {
                     pid: created_id,
                     exe: exe.clone(), args: args.clone(),
-                    print_output: true
+                    print_output: true,
+                    client_only,
                 },
             },
             &mut writer,
@@ -188,15 +197,11 @@ async fn pass_command_to(
     let (exit_now_send, mut exit_now_recv) = 
         tokio::sync::mpsc::channel::<()>(1);
 
-    ctrlc::set_handler(move || {
-        exit_now_send.try_send(()).unwrap();
-    }).expect("Error setting Ctrl-C handler");            
-
-    let a = loop {
+    'msg_loop: loop {
         let e: OutCliMessage = tokio::select! {
             a = recv_message_from(&mut reader) => a.unwrap(),
             _ = exit_now_recv.recv() => {
-                break 1;
+                break 'msg_loop 1;
             }
         };
         let ts = remaining_targets.read().await;
@@ -220,10 +225,10 @@ async fn pass_command_to(
                 let mut ts = remaining_targets.write().await;
                 ts.remove(target_index);
 
-                println!("Client {target_index} finished executing ({} remaining)", ts.len());
+                println!("Client {sender} finished executing ({} remaining)", ts.len());
                 if ts.len() == 0 {
                     println!("All target clients finished");
-                    break exit_code;
+                    break 'msg_loop exit_code;
                 }
             },
             OutCliMessage::ClientDisonnected { uid } => {
@@ -234,16 +239,16 @@ async fn pass_command_to(
                 let mut ts = remaining_targets.write().await;
                 ts.remove(target_index);
 
-                println!("Client {target_index} disonnected ({} remaining)", ts.len());
+                println!("Client {uid} disonnected ({} remaining)", ts.len());
                 if ts.len() == 0 {
                     println!("All target clients disconnected");
-                    break 1;
+                    break 'msg_loop 1;
                 }
             }
             _ => (),
         }
     };
-
+    
     let mut writer = writer_1.lock().await;
     for &target in &*remaining_targets.read().await {
         send_message_into(&InCliMessage::SendMessageTo {
