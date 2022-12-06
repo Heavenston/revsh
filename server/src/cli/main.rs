@@ -17,11 +17,11 @@ struct Args {
 
 #[derive(clap::Subcommand, Debug)]
 enum Action {
-    #[command(name = "list")]
+    #[command(name = "list", alias = "ls", alias = "l")]
     ListClients {
         
     },
-    #[command(name = "run")]
+    #[command(name = "run", alias = "r")]
     RunCommand {
         #[arg(short, long)]
         detach: bool,
@@ -30,7 +30,7 @@ enum Action {
         target: UID,
         command: String,
     },
-    #[command(name = "broadcast")]
+    #[command(name = "broadcast", alias = "b")]
     RunBroadcast {
         #[arg(short, long)]
         detach: bool,
@@ -58,21 +58,36 @@ async fn main() -> anyhow::Result<()> {
             let max_id = users.iter().map(|a| a.uid).max().unwrap_or(0);
             let longest_addr = users.iter()
                 .map(|a| format!("{:?}", a.addr).len()).max().unwrap_or(0);
+            let longest_hostname  = users.iter()
+                .map(|a| match &a.hostname {
+                    Some(mac) => format!("{}", mac).len(),
+                    None => "None".len(),
+                }).max().unwrap_or(0);
+            let longest_mac  = users.iter()
+                .map(|a| match a.mac_address {
+                    Some(mac) => format!("{}", mac).len(),
+                    None => "None".len(),
+                }).max().unwrap_or(0);
             let age_length = users.iter()
                 .map(|a| format!("{}", (chrono::Utc::now() - a.connected_at).num_seconds()).len()).max().unwrap_or(0);
             let id_length = format!("{max_id}").len();
-            println!("--{}---{}---{}---", "-".repeat(id_length), "-".repeat(longest_addr), "-".repeat(age_length));
+
+            println!("--{}---{}---{}---{}---{}---", "-".repeat(id_length), "-".repeat(longest_addr), "-".repeat(age_length), "-".repeat(longest_hostname), "-".repeat(longest_mac));
             for user in users {
                 println!(
-                    "| {id:0id_length$} | {addr:?} | {age:0age_length$}s |",
+                    "| {id:0id_length$} | {hostname:host_length$} | {mac:mac_length$} | {addr:?} | {age:0age_length$}s |",
                     id = user.uid,
                     id_length = id_length,
+                    hostname = user.hostname.map(|a| format!("{}", a)).unwrap_or(format!("None")),
+                    host_length = longest_hostname,
+                    mac = user.mac_address.map(|a| format!("{}", a)).unwrap_or(format!("None")),
+                    mac_length = longest_mac,
                     addr = user.addr,
                     age = (chrono::Utc::now() - user.connected_at).num_seconds(),
                     age_length = age_length
                 );
             }
-            println!("--{}---{}---{}---", "-".repeat(id_length), "-".repeat(longest_addr), "-".repeat(age_length));
+            println!("--{}---{}---{}---{}---{}---", "-".repeat(id_length), "-".repeat(longest_addr), "-".repeat(age_length), "-".repeat(longest_hostname), "-".repeat(longest_mac));
         },
         Action::RunCommand { target, command, detach, client_only } => {
             let (reader, writer) = stream.into_split();

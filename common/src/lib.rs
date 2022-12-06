@@ -33,6 +33,10 @@ pub enum S2CMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum C2SMessage {
+    Hello {
+        mac_address: mac_address::MacAddress,
+        hostname: String,
+    },
     ProcessOutput {
         pid: UID,
         data: Box<[u8]>,

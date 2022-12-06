@@ -57,6 +57,8 @@ pub struct OutCliUserInfo {
     pub uid: UID,
     pub addr: SocketAddr,
     pub connected_at: DateTime<Utc>,
+    pub mac_address: Option<mac_address::MacAddress>,
+    pub hostname: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

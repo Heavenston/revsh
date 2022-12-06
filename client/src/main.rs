@@ -74,7 +74,15 @@ async fn main() -> anyhow::Result<()> {
 
     let processes = Arc::new(RwLock::new(HashMap::<UID, RunningProcess>::new()));
     let (global_sender, mut global_receiver) = broadcast::channel::<GlobalEvent>(100);
-
+    
+    send_message_into(
+        &C2SMessage::Hello {
+            mac_address: mac_address::get_mac_address().unwrap().unwrap(),
+            hostname: gethostname::gethostname().into_string().unwrap(),
+        },
+        &mut writer
+    ).await.unwrap();
+    
     loop {
         tokio::select! {
             message = recv_message_from(&mut reader) => {

