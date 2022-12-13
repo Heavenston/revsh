@@ -1,11 +1,12 @@
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
+use tokio::net::tcp::{OwnedWriteHalf, OwnedReadHalf};
 use std::mem::size_of;
 use futures::future::OptionFuture;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, RwLock};
 use std::io::{self, BufRead, Write, Read};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, WriteHalf};
 use tokio::net::{TcpListener, TcpSocket};
 use std::collections::HashMap;
 use tokio::process;
@@ -44,44 +45,46 @@ struct RunningProcess {
     event_sender: mpsc::Sender<OutProcessEvent>,
 }
 
+async fn reconnect(address: SocketAddr) -> (OwnedReadHalf, OwnedWriteHalf) {
+    loop {
+        let socket = TcpSocket::new_v4().unwrap();
+        let stream = match socket.connect(address.clone()).await {
+            Ok(s) => s,
+            Err(..) => {
+                eprintln!("Failed (wait 5s)");
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                eprintln!("Retrying to connect...");
+                continue
+            },
+        };
+        println!("Successfully reconnected to {:?}!", address);
+
+        let (r, mut w) = stream.into_split();
+        send_hello(&mut w).await;
+        break (r, w);
+    }
+}
+
+async fn send_hello(writer: &mut OwnedWriteHalf) {
+    send_message_into(
+        &C2SMessage::Hello {
+            mac_address: mac_address::get_mac_address().unwrap().unwrap(),
+            hostname: gethostname::gethostname().into_string().unwrap(),
+        },
+        writer
+    ).await.unwrap();
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let bjr = std::env::args().nth(1).expect("Missing argument");
     println!("Connecting to {bjr:?}...");
 
     let address: SocketAddr = bjr.parse().unwrap();
-
-    let mut socket;
-    let mut reader;
-    let mut writer;
-
-    loop {
-        socket = TcpSocket::new_v4().unwrap();
-        let stream = match socket.connect(address.clone()).await {
-            Ok(s) => s,
-            Err(..) => {
-                println!("Failed (wait 5s)");
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                println!("Retrying to connect...");
-                continue
-            },
-        };
-        println!("Successfully reconnected to {:?}!", address);
-
-        (reader, writer) = stream.into_split();
-        break;
-    }
+    let (mut reader, mut writer) = reconnect(address).await;
 
     let processes = Arc::new(RwLock::new(HashMap::<UID, RunningProcess>::new()));
     let (global_sender, mut global_receiver) = broadcast::channel::<GlobalEvent>(100);
-    
-    send_message_into(
-        &C2SMessage::Hello {
-            mac_address: mac_address::get_mac_address().unwrap().unwrap(),
-            hostname: gethostname::gethostname().into_string().unwrap(),
-        },
-        &mut writer
-    ).await.unwrap();
     
     loop {
         tokio::select! {
@@ -89,24 +92,7 @@ async fn main() -> anyhow::Result<()> {
                 let mess = match message {
                     Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
                         println!("Disonnected from server");
-                        
-                        loop {
-                            println!("Trying to reconnect...");
-                            socket = TcpSocket::new_v4().unwrap();
-                            let stream = match socket.connect(address.clone()).await {
-                                Ok(s) => s,
-                                Err(..) => {
-                                    println!("Failed (wait 2s)");
-                                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                                    continue
-                                },
-                            };
-                            println!("Successfully reconnected to {:?}!", address);
-    
-                            (reader, writer) = stream.into_split();
-                            break;
-                        }
-                        
+                        (reader, writer) = reconnect(address).await;
                         continue;
                     },
                     a => a.unwrap(),
