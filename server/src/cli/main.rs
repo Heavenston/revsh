@@ -152,7 +152,7 @@ async fn tui(
             }
         }
 
-        if !crossterm::event::poll(Duration::from_millis(250)).unwrap() {
+        if !crossterm::event::poll(Duration::from_millis(100)).unwrap() {
             continue
         }
 
